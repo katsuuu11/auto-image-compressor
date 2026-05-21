@@ -1,5 +1,6 @@
-const express = require('express');
-const cors = require('cors');
+const path = require('node:path');
+const express = require(path.join(__dirname, '..', 'node_modules', 'express'));
+const cors = require(path.join(__dirname, '..', 'node_modules', 'cors'));
 const { compressImage } = require('./compressor');
 
 const PORT = 3000;
