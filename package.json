@@ -7,7 +7,11 @@
     "start": "electron .",
     "build": "electron-builder --mac dmg"
   },
-  "dependencies": {},
+  "dependencies": {
+    "express": "^4.21.2",
+    "cors": "^2.8.5",
+    "sharp": "^0.33.5"
+  },
   "devDependencies": {
     "electron": "^31.7.7",
     "electron-builder": "^24.13.3"
@@ -23,7 +27,8 @@
       "extension/**/*",
       "assets/**/*",
       "README.md",
-      "CHROME_EXTENSION_SETUP.md"
+      "CHROME_EXTENSION_SETUP.md",
+      "node_modules/**/*"
     ],
     "asar": true,
     "mac": {
