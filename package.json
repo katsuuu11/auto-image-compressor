@@ -20,15 +20,9 @@
     "appId": "com.yourcompany.image-compressor",
     "productName": "ImageCompressor",
     "files": [
-      "main.js",
-      "preload.js",
-      "renderer/**/*",
-      "app/**/*",
-      "extension/**/*",
-      "assets/**/*",
-      "README.md",
-      "CHROME_EXTENSION_SETUP.md",
-      "node_modules/**/*"
+      "**/*",
+      "!node_modules/.bin",
+      "!dist/**/*"
     ],
     "asar": true,
     "mac": {
