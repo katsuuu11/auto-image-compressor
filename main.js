@@ -1,4 +1,4 @@
-const { app, Tray, Menu, BrowserWindow, dialog } = require('electron');
+const { app, Tray, Menu, BrowserWindow, dialog, nativeImage } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -87,7 +87,9 @@ function openLogWindow() {
 
 function initializeTray() {
   const trayIconPath = path.join(__dirname, 'assets', 'tray-icon.png');
-  tray = new Tray(trayIconPath);
+  const trayIcon = nativeImage.createFromPath(trayIconPath).resize({ width: 18, height: 18 });
+  trayIcon.setTemplateImage(true);
+  tray = new Tray(trayIcon);
   tray.setToolTip('ImageCompressor');
   tray.on('click', () => tray.popUpContextMenu());
   updateTrayMenu();
