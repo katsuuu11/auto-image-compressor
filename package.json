@@ -1,0 +1,47 @@
+{
+  "name": "image-compressor-electron",
+  "version": "1.0.0",
+  "description": "Menu bar Electron app for automatic image compression",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac dmg"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.yourcompany.image-compressor",
+    "productName": "ImageCompressor",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "app/**/*",
+      "extension/**/*",
+      "assets/**/*",
+      "README.md",
+      "CHROME_EXTENSION_SETUP.md"
+    ],
+    "asar": true,
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64",
+            "universal"
+          ]
+        }
+      ],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.utilities"
+    },
+    "dmg": {
+      "title": "ImageCompressor Installer"
+    }
+  }
+}
