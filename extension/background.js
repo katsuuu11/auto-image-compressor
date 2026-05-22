@@ -1,4 +1,4 @@
-const TARGET_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const TARGET_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.zip']);
 
 function getExtension(filePath) {
   const match = filePath.toLowerCase().match(/\.[^./\\]+$/);
@@ -24,8 +24,10 @@ chrome.downloads.onChanged.addListener((delta) => {
       return;
     }
 
+    const endpoint = ext === '.zip' ? '/extract' : '/compress';
+
     try {
-      const response = await fetch('http://localhost:3000/compress', {
+      const response = await fetch(`http://localhost:3000${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -34,7 +36,7 @@ chrome.downloads.onChanged.addListener((delta) => {
       });
 
       const data = await response.json();
-      console.log('[Image Auto Compressor] Compression result:', data);
+      console.log('[Image Auto Compressor] Processing result:', data);
     } catch (error) {
       console.error('[Image Auto Compressor] Compression request failed:', error);
     }
