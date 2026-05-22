@@ -39,6 +39,10 @@ function startServer() {
   const serverPath = path.join(__dirname, 'app', 'index.js');
   serverProcess = spawn(process.execPath, [serverPath], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+    },
   });
 
   serverRunning = true;

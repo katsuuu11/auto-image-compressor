@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --mac dmg"
+    "rebuild:sharp": "electron-rebuild -f -w sharp",
+    "build": "npm run rebuild:sharp && electron-builder --mac dmg"
   },
   "dependencies": {
     "express": "^4.21.2",
@@ -15,7 +16,8 @@
   },
   "devDependencies": {
     "electron": "^31.7.7",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "electron-rebuild": "^3.7.1"
   },
   "build": {
     "appId": "com.yourcompany.image-compressor",
@@ -26,6 +28,11 @@
       "!dist/**/*"
     ],
     "asar": true,
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*"
+    ],
     "mac": {
       "target": [
         {
