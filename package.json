@@ -21,11 +21,16 @@
   "build": {
     "appId": "com.yourcompany.image-compressor",
     "productName": "ImageCompressor",
-   "files": [
-  "**/*",
-  "!node_modules/.bin",
-  "!dist/**/*",
-  "assets/**/*"
+    "files": [
+      "main.js",
+      "preload.js",
+      "assets/**/*",
+      "renderer/**/*",
+      "app/**/*",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/.bin",
+      "!dist/**/*"
     ],
     "asar": true,
     "asarUnpack": [
@@ -49,6 +54,12 @@
     },
     "dmg": {
       "title": "ImageCompressor Installer"
+    },
+    "directories": {
+      "app": "."
+    },
+    "extraMetadata": {
+      "main": "main.js"
     }
   }
 }
