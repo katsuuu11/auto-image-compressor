@@ -1,2 +1,2 @@
-assets/icon.icns
-assets/tray-icon.png
+dist/
+node_modules/
