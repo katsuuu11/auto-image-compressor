@@ -1,0 +1,9 @@
+{
+  "name": "image-compressor-app",
+  "version": "1.0.0",
+  "description": "Local server for automatic image compression from Chrome extension",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {}
+}
