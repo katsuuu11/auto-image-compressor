@@ -43,7 +43,7 @@ npm run build
 3. 「パッケージ化されていない拡張機能を読み込む」をクリック
 4. `⌘+Shift+G` で以下のパスを入力して選択
 
-/Applications/ImageCompressor.app/Contents/Resources/app/extension
+/Applications/ImageCompressor.app/Contents/Resources/extension
 
 ### 使い方
 セットアップ後は何も操作不要。Chromeで画像を保存するだけで自動圧縮されます。
