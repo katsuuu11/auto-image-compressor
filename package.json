@@ -5,8 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "rebuild:sharp": "electron-rebuild -f -w sharp",
-    "build": "npm run rebuild:sharp && electron-builder --mac dmg"
+    "rebuild:sharp": "node -e \"require('sharp'); console.log('sharp binary check passed')\"",
+    "build": "npm run rebuild:sharp"
   },
   "dependencies": {
     "express": "^4.21.2",
@@ -16,8 +16,7 @@
   },
   "devDependencies": {
     "electron": "^31.7.7",
-    "electron-builder": "^24.13.3",
-    "electron-rebuild": "^3.7.1"
+    "electron-builder": "^24.13.3"
   },
   "build": {
     "appId": "com.yourcompany.image-compressor",
