@@ -11,11 +11,14 @@ const app = express();
 const IMAGE_PATH_PATTERNS = ['images/', 'image/', 'img/'];
 const COMPRESSIBLE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 
+function hasWebsiteLikeImagePath(entryPath) {
+  const normalizedPath = entryPath.replace(/\\/g, '/').toLowerCase();
+  return IMAGE_PATH_PATTERNS.some((pattern) => normalizedPath.includes(pattern));
+}
+
 function shouldSkipZipExtraction(entries) {
-  return entries.some((entry) => {
-    const normalizedPath = entry.path.replace(/\\/g, '/').toLowerCase();
-    return IMAGE_PATH_PATTERNS.some((pattern) => normalizedPath.includes(pattern));
-  });
+  // Inspect all entries in advance. If any path looks like website assets, skip the whole ZIP.
+  return entries.some((entry) => hasWebsiteLikeImagePath(entry.path));
 }
 
 async function extractAndCompressZip(filePath) {
