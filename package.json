@@ -21,10 +21,11 @@
   "build": {
     "appId": "com.yourcompany.image-compressor",
     "productName": "ImageCompressor",
-    "files": [
-      "**/*",
-      "!node_modules/.bin",
-      "!dist/**/*"
+   "files": [
+  "**/*",
+  "!node_modules/.bin",
+  "!dist/**/*",
+  "assets/**/*"
     ],
     "asar": true,
     "asarUnpack": [
