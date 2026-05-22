@@ -26,7 +26,6 @@
       "main.js",
       "preload.js",
       "assets/**/*",
-      "extension/**/*",
       "renderer/**/*",
       "app/**/*",
       "package.json",
@@ -62,6 +61,12 @@
     },
     "extraMetadata": {
       "main": "main.js"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "extension",
+        "to": "extension"
+      }
+    ]
   }
 }
