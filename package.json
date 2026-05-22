@@ -9,12 +9,13 @@
     "build": "npm run rebuild:sharp && electron-builder --mac dmg"
   },
   "dependencies": {
-    "express": "^4.21.2",
     "cors": "^2.8.5",
+    "express": "^4.21.2",
     "sharp": "^0.33.5",
     "unzipper": "^0.12.3"
   },
   "devDependencies": {
+    "dmg-license": "file:vendor/dmg-license",
     "electron": "^31.7.7",
     "electron-builder": "^24.13.3"
   },
@@ -25,6 +26,7 @@
       "main.js",
       "preload.js",
       "assets/**/*",
+      "extension/**/*",
       "renderer/**/*",
       "app/**/*",
       "package.json",
