@@ -1,9 +1,9 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const fss = require('node:fs');
-const express = require(path.join(__dirname, '..', 'node_modules', 'express'));
-const cors = require(path.join(__dirname, '..', 'node_modules', 'cors'));
-const unzipper = require(path.join(__dirname, '..', 'node_modules', 'unzipper'));
+const express = require('express');
+const cors = require('cors');
+const unzipper = require('unzipper');
 const { compressImage } = require('./compressor');
 
 const PORT = 3000;

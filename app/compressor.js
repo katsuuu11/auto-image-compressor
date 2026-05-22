@@ -1,6 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const sharp = require(path.join(__dirname, '..', 'node_modules', 'sharp'));
+const sharp = require('sharp');
 
 const RETRY_DELAY_MS = 500;
 const MAX_RETRIES = 3;
