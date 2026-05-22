@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "rebuild:sharp": "node -e \"require('sharp'); console.log('sharp binary check passed')\"",
-    "build": "npm run rebuild:sharp"
+    "build": "npm run rebuild:sharp && NODE_PATH=./vendor electron-builder --mac dmg"
   },
   "dependencies": {
     "express": "^4.21.2",
