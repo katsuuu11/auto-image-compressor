@@ -2,14 +2,17 @@ const { app, Tray, Menu, BrowserWindow, dialog, nativeImage } = require('electro
 const path = require('path');
 const { spawn } = require('child_process');
 const chokidar = require('chokidar');
-const Store = require('electron-store');
+let store = null;
 
-const store = new Store({
-  name: 'settings',
-  defaults: {
-    watchedFolders: [],
-  },
-});
+async function initializeStore() {
+  const { default: Store } = await import('electron-store');
+  store = new Store({
+    name: 'settings',
+    defaults: {
+      watchedFolders: [],
+    },
+  });
+}
 
 let tray = null;
 let logWindow = null;
@@ -259,13 +262,14 @@ function initializeTray() {
   updateTrayMenu();
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (app.dock && typeof app.dock.hide === 'function') {
     app.dock.hide();
   }
 
   app.setLoginItemSettings({ openAtLogin: true });
 
+  await initializeStore();
   initializeTray();
   syncFolderWatchers();
   startServer();
