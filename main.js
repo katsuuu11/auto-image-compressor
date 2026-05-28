@@ -22,6 +22,7 @@ const logs = [];
 const folderWatchers = new Map();
 const processingFiles = new Set();
 const WATCHED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const WATCH_GLOBS = ['*.png', '*.jpg', '*.jpeg', '*.webp', '*.zip'];
 
 function pushLog(message) {
   const line = `[${new Date().toISOString()}] ${message}`;
@@ -78,11 +79,13 @@ async function handleDetectedFile(filePath) {
 function startWatchingFolder(folderPath) {
   if (folderWatchers.has(folderPath)) return;
 
-  const watcher = chokidar.watch(folderPath, {
-    ignored: /(^|[\/\\])\../,
+  const watchTargets = WATCH_GLOBS.map((glob) => path.join(folderPath, glob));
+
+  const watcher = chokidar.watch(watchTargets, {
     ignoreInitial: true,
+    depth: 0,
     awaitWriteFinish: {
-      stabilityThreshold: 1000,
+      stabilityThreshold: 1500,
       pollInterval: 100,
     },
   });
