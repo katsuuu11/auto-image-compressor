@@ -22,7 +22,7 @@ const logs = [];
 const folderWatchers = new Map();
 const processingFiles = new Set();
 const WATCHED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
-const WATCH_GLOBS = ['*.png', '*.jpg', '*.jpeg', '*.webp', '*.zip'];
+const WATCHED_FILE_EXTENSIONS = new Set([...WATCHED_IMAGE_EXTENSIONS, '.zip']);
 
 function pushLog(message) {
   const line = `[${new Date().toISOString()}] ${message}`;
@@ -62,7 +62,12 @@ async function postToServer(endpoint, filePath) {
   }
 }
 
+function isWatchedFile(filePath) {
+  return WATCHED_FILE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
 async function handleDetectedFile(filePath) {
+  if (!isWatchedFile(filePath)) return;
   if (processingFiles.has(filePath)) return;
   processingFiles.add(filePath);
 
@@ -79,9 +84,9 @@ async function handleDetectedFile(filePath) {
 function startWatchingFolder(folderPath) {
   if (folderWatchers.has(folderPath)) return;
 
-  const watchTargets = WATCH_GLOBS.map((glob) => path.join(folderPath, glob));
-
-  const watcher = chokidar.watch(watchTargets, {
+  // Chokidar v4 does not expand glob patterns, so watch the directory
+  // itself and filter the top-level add events by extension below.
+  const watcher = chokidar.watch(folderPath, {
     ignoreInitial: true,
     depth: 0,
     awaitWriteFinish: {
@@ -91,6 +96,8 @@ function startWatchingFolder(folderPath) {
   });
 
   watcher.on('add', (filePath) => {
+    if (!isWatchedFile(filePath)) return;
+
     pushLog(`Detected new file: ${filePath}`);
     handleDetectedFile(filePath);
   });
