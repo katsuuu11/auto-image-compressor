@@ -2,9 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const iconv = require('iconv-lite');
 const {
+  compressImageWithDuplicateGuard,
   containsCompressibleImage,
   containsWebsiteLikeImagePath,
   decodeEntryPath,
+  resetDuplicateCompressionStateForTesting,
+  setCompressImageForTesting,
 } = require('./index');
 
 test('decodeEntryPath decodes non-Unicode Shift-JIS file names as UTF-8 strings', () => {
@@ -148,4 +151,80 @@ test('extractAndCompressZip skips extraction when a ZIP contains no supported im
   } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
+});
+
+test.afterEach(() => {
+  delete process.env.COMPRESS_DUPLICATE_COOLDOWN_MS;
+  resetDuplicateCompressionStateForTesting();
+});
+
+test('compressImageWithDuplicateGuard skips duplicate requests while a file is in progress', async () => {
+  let calls = 0;
+  let resolveCompression;
+  const compressionStarted = new Promise((resolve) => {
+    setCompressImageForTesting(async (filePath) => {
+      calls += 1;
+      resolve();
+      await new Promise((innerResolve) => {
+        resolveCompression = innerResolve;
+      });
+
+      return { success: true, skipped: false, filePath };
+    });
+  });
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(message);
+
+  try {
+    const firstResult = compressImageWithDuplicateGuard('/tmp/duplicate.png', 'first');
+    await compressionStarted;
+
+    const duplicateResult = await compressImageWithDuplicateGuard('/tmp/duplicate.png', 'second');
+    resolveCompression();
+
+    assert.equal((await firstResult).success, true);
+    assert.equal(duplicateResult.success, true);
+    assert.equal(duplicateResult.skipped, true);
+    assert.match(duplicateResult.reason, /inProgress/);
+    assert.equal(calls, 1);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.match(warnings.join('\n'), /reason=inProgress/);
+  assert.match(warnings.join('\n'), /source=second/);
+});
+
+test('compressImageWithDuplicateGuard skips completed paths during cooldown only', async () => {
+  process.env.COMPRESS_DUPLICATE_COOLDOWN_MS = '20';
+  let calls = 0;
+  setCompressImageForTesting(async (filePath) => {
+    calls += 1;
+    return { success: true, skipped: false, filePath };
+  });
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(message);
+
+  try {
+    const firstResult = await compressImageWithDuplicateGuard('/tmp/cooldown.png', 'first');
+    const cooldownResult = await compressImageWithDuplicateGuard('/tmp/cooldown.png', 'second');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const afterCooldownResult = await compressImageWithDuplicateGuard('/tmp/cooldown.png', 'third');
+
+    assert.equal(firstResult.skipped, false);
+    assert.equal(cooldownResult.success, true);
+    assert.equal(cooldownResult.skipped, true);
+    assert.match(cooldownResult.reason, /cooldown/);
+    assert.equal(afterCooldownResult.skipped, false);
+    assert.equal(calls, 2);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.match(warnings.join('\n'), /reason=cooldown/);
+  assert.match(warnings.join('\n'), /source=second/);
 });

@@ -68,17 +68,24 @@ function isWatchedFile(filePath) {
 
 async function handleDetectedFile(filePath) {
   if (!isWatchedFile(filePath)) return;
-  if (processingFiles.has(filePath)) return;
+  if (processingFiles.has(filePath)) {
+    pushLog(`[watch] skipped reason=inProgress path=${filePath}`);
+    return;
+  }
   processingFiles.add(filePath);
 
-  const ext = path.extname(filePath).toLowerCase();
-  if (WATCHED_IMAGE_EXTENSIONS.has(ext)) {
-    await postToServer('/compress', filePath);
-  } else if (ext === '.zip') {
-    await postToServer('/extract', filePath);
+  try {
+    const ext = path.extname(filePath).toLowerCase();
+    if (WATCHED_IMAGE_EXTENSIONS.has(ext)) {
+      pushLog(`[watch] posting endpoint=/compress path=${filePath}`);
+      await postToServer('/compress', filePath);
+    } else if (ext === '.zip') {
+      pushLog(`[watch] posting endpoint=/extract path=${filePath}`);
+      await postToServer('/extract', filePath);
+    }
+  } finally {
+    processingFiles.delete(filePath);
   }
-
-  processingFiles.delete(filePath);
 }
 
 function startWatchingFolder(folderPath) {
@@ -90,7 +97,7 @@ function startWatchingFolder(folderPath) {
     ignoreInitial: true,
     depth: 0,
     awaitWriteFinish: {
-      stabilityThreshold: 1500,
+      stabilityThreshold: 1000,
       pollInterval: 100,
     },
   });
@@ -98,7 +105,7 @@ function startWatchingFolder(folderPath) {
   watcher.on('add', (filePath) => {
     if (!isWatchedFile(filePath)) return;
 
-    pushLog(`Detected new file: ${filePath}`);
+    pushLog(`[watch] event=add path=${filePath}`);
     handleDetectedFile(filePath);
   });
 
