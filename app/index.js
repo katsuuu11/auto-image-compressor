@@ -1,3 +1,4 @@
+require('dotenv/config');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const fss = require('node:fs');
@@ -5,12 +6,21 @@ const express = require('express');
 const cors = require('cors');
 const unzipper = require('unzipper');
 const iconv = require('iconv-lite');
-const { compressImage } = require('./compressor');
+const { compressImage, initializeTinify } = require('./compressor');
+
+initializeTinify(process.env.TINIFY_API_KEY);
 
 const PORT = 3000;
 const app = express();
 const IMAGE_PATH_PATTERNS = ['images/', 'image/', 'img/'];
 const COMPRESSIBLE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const DEFAULT_DUPLICATE_COOLDOWN_MS = 5000;
+const RECENT_COMPLETION_TTL_MS = 60 * 60 * 1000;
+const RECENT_COMPLETION_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+
+const inProgressPaths = new Set();
+const recentlyCompletedPaths = new Map();
+let compressImageHandler = compressImage;
 
 function decodeEntryPath(entry) {
   const isUnicode = entry.isUnicode ?? entry.props?.flags?.isUnicode;
@@ -38,6 +48,85 @@ function containsCompressibleImage(entries) {
     ({ entry, entryPath }) =>
       entry.type !== 'Directory' && COMPRESSIBLE_EXTENSIONS.has(path.extname(entryPath).toLowerCase()),
   );
+}
+
+function getDuplicateCooldownMs() {
+  const configuredCooldown = Number(process.env.COMPRESS_DUPLICATE_COOLDOWN_MS);
+
+  return Number.isFinite(configuredCooldown) && configuredCooldown >= 0
+    ? configuredCooldown
+    : DEFAULT_DUPLICATE_COOLDOWN_MS;
+}
+
+function getTrackedPath(filePath) {
+  return path.resolve(filePath);
+}
+
+function getDuplicateSkipResult({ filePath, source, reason }) {
+  console.warn(`[compressImage] skipped reason=${reason} source=${source} path=${filePath}`);
+
+  return {
+    success: true,
+    skipped: true,
+    reason: `Duplicate compression skipped: ${reason}.`,
+    filePath,
+  };
+}
+
+function cleanupRecentlyCompletedPaths(now = Date.now()) {
+  for (const [trackedPath, completedAt] of recentlyCompletedPaths.entries()) {
+    if (now - completedAt > RECENT_COMPLETION_TTL_MS) {
+      recentlyCompletedPaths.delete(trackedPath);
+    }
+  }
+}
+
+function getDuplicateCompressionSkip(filePath, source) {
+  const trackedPath = getTrackedPath(filePath);
+
+  if (inProgressPaths.has(trackedPath)) {
+    return getDuplicateSkipResult({ filePath, source, reason: 'inProgress' });
+  }
+
+  const completedAt = recentlyCompletedPaths.get(trackedPath);
+  if (completedAt === undefined) {
+    return null;
+  }
+
+  const elapsedMs = Date.now() - completedAt;
+  if (elapsedMs < getDuplicateCooldownMs()) {
+    return getDuplicateSkipResult({ filePath, source, reason: 'cooldown' });
+  }
+
+  recentlyCompletedPaths.delete(trackedPath);
+  return null;
+}
+
+async function compressImageWithDuplicateGuard(filePath, source = 'unknown') {
+  const trackedPath = getTrackedPath(filePath);
+  const duplicateSkip = getDuplicateCompressionSkip(filePath, source);
+
+  if (duplicateSkip) {
+    return duplicateSkip;
+  }
+
+  inProgressPaths.add(trackedPath);
+
+  try {
+    return await compressImageHandler(filePath);
+  } finally {
+    inProgressPaths.delete(trackedPath);
+    recentlyCompletedPaths.set(trackedPath, Date.now());
+  }
+}
+
+const cleanupRecentlyCompletedPathsInterval = setInterval(
+  cleanupRecentlyCompletedPaths,
+  RECENT_COMPLETION_CLEANUP_INTERVAL_MS,
+);
+
+if (typeof cleanupRecentlyCompletedPathsInterval.unref === 'function') {
+  cleanupRecentlyCompletedPathsInterval.unref();
 }
 
 async function extractAndCompressZip(filePath) {
@@ -93,7 +182,7 @@ async function extractAndCompressZip(filePath) {
       continue;
     }
 
-    const result = await compressImage(destinationPath);
+    const result = await compressImageWithDuplicateGuard(destinationPath, 'zip');
     compressedResults.push(result);
   }
 
@@ -131,7 +220,9 @@ app.post('/compress', async (req, res) => {
       .json({ success: false, error: 'filePath is required and must be a string' });
   }
 
-  const result = await compressImage(filePath);
+  console.log(`[/compress] received path=${filePath}`);
+
+  const result = await compressImageWithDuplicateGuard(filePath, '/compress');
 
   if (result.success) {
     return res.json({ success: true, filePath: result.filePath, ...result });
@@ -148,6 +239,8 @@ app.post('/extract', async (req, res) => {
       .status(400)
       .json({ success: false, error: 'filePath is required and must be a string' });
   }
+
+  console.log(`[/extract] received path=${filePath}`);
 
   try {
     const result = await extractAndCompressZip(filePath);
@@ -167,5 +260,15 @@ module.exports = {
   containsCompressibleImage,
   containsWebsiteLikeImagePath,
   decodeEntryPath,
+  compressImageWithDuplicateGuard,
+  cleanupRecentlyCompletedPaths,
   extractAndCompressZip,
+  setCompressImageForTesting(nextCompressImageHandler) {
+    compressImageHandler = nextCompressImageHandler;
+  },
+  resetDuplicateCompressionStateForTesting() {
+    inProgressPaths.clear();
+    recentlyCompletedPaths.clear();
+    compressImageHandler = compressImage;
+  },
 };
