@@ -4,9 +4,12 @@ const sharp = require('sharp');
 
 const RETRY_DELAY_MS = 500;
 const MAX_RETRIES = 3;
+const TINIFY_MONTHLY_FREE_LIMIT = 500;
 
 const SUPPORTED_FORMATS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 const SKIPPED_FORMATS = new Set(['.gif', '.svg']);
+
+let tinifyClient;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -16,7 +19,65 @@ function getFormat(filePath) {
   return path.extname(filePath).toLowerCase();
 }
 
-async function writeCompressedBuffer(filePath, ext, inputBuffer) {
+function getReductionPercent(originalSize, compressedSize) {
+  if (originalSize === 0) {
+    return 0;
+  }
+
+  return Math.round((1 - compressedSize / originalSize) * 100);
+}
+
+function getTinifyCompressionCount(tinify) {
+  return tinify.compressionCount ?? tinify.compression_count;
+}
+
+function getTinifyClient() {
+  if (!tinifyClient) {
+    tinifyClient = require('tinify');
+  }
+
+  return tinifyClient;
+}
+
+function initializeTinify(apiKey) {
+  if (!apiKey) {
+    return null;
+  }
+
+  const tinify = getTinifyClient();
+  tinify.key = apiKey;
+  return tinify;
+}
+
+function isTinifyFallbackError(error, tinify) {
+  return (
+    error instanceof tinify.AccountError ||
+    error instanceof tinify.ConnectionError ||
+    error instanceof tinify.ServerError
+  );
+}
+
+function logCompressionResult({ engine, filePath, originalSize, compressedSize, tinify }) {
+  const reduction = getReductionPercent(originalSize, compressedSize);
+  const compressionCount = tinify ? getTinifyCompressionCount(tinify) : undefined;
+  const tinifyCount = compressionCount === undefined
+    ? ''
+    : ` compressionCount=${compressionCount}/${TINIFY_MONTHLY_FREE_LIMIT}`;
+
+  console.log(
+    `[compressImage] engine=${engine} file=${filePath} originalSize=${originalSize} ` +
+      `compressedSize=${compressedSize} reduction=${reduction}%${tinifyCount}`,
+  );
+}
+
+function logTinifyFallback(error) {
+  console.warn(
+    `[compressImage] WARN engine=tinify fallback=sharp reason=${error.name || 'Error'} ` +
+      `message=${error.message}`,
+  );
+}
+
+async function writeSharpCompressedBuffer(ext, inputBuffer) {
   switch (ext) {
     case '.jpg':
     case '.jpeg':
@@ -30,6 +91,43 @@ async function writeCompressedBuffer(filePath, ext, inputBuffer) {
     default:
       return null;
   }
+}
+
+async function writeTinifyCompressedBuffer(inputBuffer) {
+  const tinify = initializeTinify(process.env.TINIFY_API_KEY);
+
+  if (!tinify) {
+    return null;
+  }
+
+  try {
+    const compressedBuffer = await tinify.fromBuffer(inputBuffer).toBuffer();
+    return { buffer: compressedBuffer, tinify };
+  } catch (error) {
+    if (isTinifyFallbackError(error, tinify)) {
+      logTinifyFallback(error);
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+async function writeCompressedBuffer(ext, inputBuffer) {
+  const tinifyResult = await writeTinifyCompressedBuffer(inputBuffer);
+
+  if (tinifyResult) {
+    return {
+      engine: 'tinify',
+      buffer: tinifyResult.buffer,
+      tinify: tinifyResult.tinify,
+    };
+  }
+
+  const compressedBuffer = await writeSharpCompressedBuffer(ext, inputBuffer);
+  return compressedBuffer
+    ? { engine: 'sharp', buffer: compressedBuffer }
+    : null;
 }
 
 async function compressImage(filePath) {
@@ -49,13 +147,9 @@ async function compressImage(filePath) {
       await fs.access(filePath);
 
       const originalBuffer = await fs.readFile(filePath);
-      const compressedBuffer = await writeCompressedBuffer(
-        filePath,
-        ext,
-        originalBuffer,
-      );
+      const compressedResult = await writeCompressedBuffer(ext, originalBuffer);
 
-      if (!compressedBuffer) {
+      if (!compressedResult) {
         return {
           success: true,
           skipped: true,
@@ -63,6 +157,15 @@ async function compressImage(filePath) {
           filePath,
         };
       }
+
+      const compressedBuffer = compressedResult.buffer;
+      logCompressionResult({
+        engine: compressedResult.engine,
+        filePath,
+        originalSize: originalBuffer.length,
+        compressedSize: compressedBuffer.length,
+        tinify: compressedResult.tinify,
+      });
 
       if (compressedBuffer.length >= originalBuffer.length) {
         return {
@@ -110,6 +213,12 @@ async function compressImage(filePath) {
   };
 }
 
+function setTinifyClientForTesting(nextTinifyClient) {
+  tinifyClient = nextTinifyClient;
+}
+
 module.exports = {
   compressImage,
+  initializeTinify,
+  setTinifyClientForTesting,
 };

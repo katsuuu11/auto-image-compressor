@@ -2,3 +2,4 @@ dist/
 node_modules/
 assets/icon.icns
 assets/tray-icon.png
+.env

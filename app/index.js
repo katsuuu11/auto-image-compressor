@@ -1,3 +1,4 @@
+require('dotenv/config');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const fss = require('node:fs');
@@ -5,7 +6,9 @@ const express = require('express');
 const cors = require('cors');
 const unzipper = require('unzipper');
 const iconv = require('iconv-lite');
-const { compressImage } = require('./compressor');
+const { compressImage, initializeTinify } = require('./compressor');
+
+initializeTinify(process.env.TINIFY_API_KEY);
 
 const PORT = 3000;
 const app = express();
