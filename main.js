@@ -1,4 +1,4 @@
-const { app, Tray, Menu, BrowserWindow, dialog, nativeImage } = require('electron');
+const { app, Tray, Menu, BrowserWindow, dialog, nativeImage, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const chokidar = require('chokidar');
@@ -10,8 +10,128 @@ async function initializeStore() {
     name: 'settings',
     defaults: {
       watchedFolders: [],
+      tinifyApiKey: '',
     },
   });
+}
+
+function setTinifyApiKey() {
+  const currentApiKey = store.get('tinifyApiKey', '');
+  const currentApiKeyPreview = currentApiKey ? currentApiKey.slice(0, 8) : '未設定';
+  const saveChannel = `tinify-api-key:save:${Date.now()}`;
+  const cancelChannel = `tinify-api-key:cancel:${Date.now()}`;
+  const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[character]));
+
+  const apiKeyWindow = new BrowserWindow({
+    width: 420,
+    height: 240,
+    title: 'TinyPNG APIキーを設定',
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    ipcMain.removeAllListeners(saveChannel);
+    ipcMain.removeAllListeners(cancelChannel);
+    if (!apiKeyWindow.isDestroyed()) {
+      apiKeyWindow.close();
+    }
+  };
+
+  ipcMain.once(saveChannel, (_event, apiKey) => {
+    store.set('tinifyApiKey', apiKey.trim());
+    pushLog('TinyPNG APIキーを更新しました');
+
+    if (serverRunning) {
+      stopServer();
+      setTimeout(startServer, 1000);
+    }
+
+    cleanup();
+  });
+
+  ipcMain.once(cancelChannel, cleanup);
+  apiKeyWindow.on('closed', cleanup);
+
+  apiKeyWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
+    <!DOCTYPE html>
+    <html lang="ja">
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 24px;
+            color: #222;
+          }
+          label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+          }
+          input {
+            box-sizing: border-box;
+            width: 100%;
+            padding: 8px;
+            font-size: 14px;
+          }
+          .current {
+            margin-bottom: 16px;
+            color: #555;
+          }
+          .actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 20px;
+          }
+          button {
+            padding: 6px 14px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="current">現在のキー: ${escapeHtml(currentApiKeyPreview)}</div>
+        <form id="api-key-form">
+          <label for="api-key">TinyPNG APIキー</label>
+          <input id="api-key" type="password" autocomplete="off" autofocus />
+          <div class="actions">
+            <button type="button" id="cancel">キャンセル</button>
+            <button type="submit">保存</button>
+          </div>
+        </form>
+        <script>
+          const { ipcRenderer } = require('electron');
+          const form = document.getElementById('api-key-form');
+          const input = document.getElementById('api-key');
+          const cancel = document.getElementById('cancel');
+
+          form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            ipcRenderer.send('${saveChannel}', input.value);
+          });
+
+          cancel.addEventListener('click', () => {
+            ipcRenderer.send('${cancelChannel}');
+          });
+        </script>
+      </body>
+    </html>
+  `)}`);
 }
 
 let tray = null;
@@ -205,6 +325,7 @@ function updateTrayMenu() {
     { label: '監視フォルダを追加', click: addWatchedFolder },
     { label: '監視フォルダを管理', submenu: createWatchedFolderManagementSubmenu() },
     { type: 'separator' },
+    { label: 'TinyPNG APIキーを設定', click: setTinifyApiKey },
     { label: 'ログを見る', click: openLogWindow },
     { type: 'separator' },
     { label: '終了', click: () => app.quit() },
@@ -217,11 +338,13 @@ function startServer() {
   if (serverProcess) return;
 
   const serverPath = path.join(__dirname, 'app', 'index.js');
+  const tinifyApiKey = store.get('tinifyApiKey', '');
   serverProcess = spawn(process.execPath, [serverPath], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
+      ...(tinifyApiKey ? { TINIFY_API_KEY: tinifyApiKey } : {}),
     },
   });
 
