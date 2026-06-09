@@ -11,6 +11,8 @@ async function initializeStore() {
     defaults: {
       watchedFolders: [],
       tinifyApiKey: '',
+      tinifyEnabled: true,
+      tinifyCount: 0,
     },
   });
 }
@@ -53,8 +55,15 @@ function setTinifyApiKey() {
   };
 
   ipcMain.once(saveChannel, (_event, apiKey) => {
-    store.set('tinifyApiKey', apiKey.trim());
+    const result = apiKey.trim();
+    store.set('tinifyApiKey', result);
     pushLog('TinyPNG APIキーを更新しました');
+    dialog.showMessageBox({
+      type: 'info',
+      title: '保存しました',
+      message: 'TinyPNG APIキーを保存しました',
+      buttons: ['OK'],
+    });
 
     if (serverRunning) {
       stopServer();
@@ -132,6 +141,28 @@ function setTinifyApiKey() {
       </body>
     </html>
   `)}`);
+}
+
+function toggleTinify() {
+  const current = store.get('tinifyEnabled', true);
+  store.set('tinifyEnabled', !current);
+  pushLog(`TinyPNG ${!current ? '有効' : '無効'} に変更しました`);
+  if (serverRunning) {
+    stopServer();
+    setTimeout(() => startServer(), 1000);
+  }
+  updateTrayMenu();
+}
+
+function buildTinifyGauge() {
+  const count = store.get('tinifyCount', 0);
+  const enabled = store.get('tinifyEnabled', true);
+  const remaining = 500 - count;
+  const filled = Math.round((remaining / 500) * 10);
+  const empty = 10 - filled;
+  const bar = '█'.repeat(filled) + '░'.repeat(empty);
+  const status = enabled ? 'ON' : 'OFF';
+  return `TinyPNG [${status}]  ${bar}  ${remaining}/500`;
 }
 
 let tray = null;
@@ -318,6 +349,11 @@ function updateTrayMenu() {
   const statusLabel = serverRunning ? '● 稼働中' : '● 停止中';
   const template = [
     { label: statusLabel, enabled: false },
+    { label: buildTinifyGauge(), enabled: false },
+    {
+      label: store.get('tinifyEnabled', true) ? 'TinyPNG を無効にする' : 'TinyPNG を有効にする',
+      click: toggleTinify,
+    },
     { type: 'separator' },
     { label: '圧縮を開始', click: startServer, enabled: !serverRunning },
     { label: '圧縮を停止', click: stopServer, enabled: serverRunning },
@@ -339,12 +375,14 @@ function startServer() {
 
   const serverPath = path.join(__dirname, 'app', 'index.js');
   const tinifyApiKey = store.get('tinifyApiKey', '');
+  const tinifyEnabled = store.get('tinifyEnabled', true);
   serverProcess = spawn(process.execPath, [serverPath], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
-      ...(tinifyApiKey ? { TINIFY_API_KEY: tinifyApiKey } : {}),
+      TINIFY_ENABLED: tinifyEnabled ? '1' : '0',
+      ...(tinifyApiKey && tinifyEnabled ? { TINIFY_API_KEY: tinifyApiKey } : {}),
     },
   });
 
@@ -352,7 +390,16 @@ function startServer() {
   pushLog('Compression server started on port 3000.');
   updateTrayMenu();
 
-  serverProcess.stdout.on('data', (data) => pushLog(data.toString().trim()));
+  serverProcess.stdout.on('data', (data) => {
+    const text = data.toString().trim();
+    pushLog(text);
+
+    const match = text.match(/compressionCount=(\d+)\/500/);
+    if (match) {
+      store.set('tinifyCount', parseInt(match[1], 10));
+      updateTrayMenu();
+    }
+  });
   serverProcess.stderr.on('data', (data) => pushLog(`[ERROR] ${data.toString().trim()}`));
 
   serverProcess.on('exit', (code, signal) => {
