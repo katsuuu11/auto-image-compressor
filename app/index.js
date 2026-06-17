@@ -6,6 +6,7 @@ const express = require('express');
 const cors = require('cors');
 const unzipper = require('unzipper');
 const iconv = require('iconv-lite');
+const { pipeline } = require('node:stream/promises');
 const { compressImage, initializeTinify } = require('./compressor');
 
 initializeTinify(process.env.TINIFY_API_KEY);
@@ -130,8 +131,22 @@ if (typeof cleanupRecentlyCompletedPathsInterval.unref === 'function') {
 }
 
 async function extractAndCompressZip(filePath) {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    const message = error.code === 'ENOENT'
+      ? 'ZIP file does not exist'
+      : `ZIP file is not readable: ${error.message}`;
+    return { success: false, error: message, filePath };
+  }
+
   const zipDirectory = path.dirname(filePath);
-  const directory = await unzipper.Open.file(filePath);
+  let directory;
+  try {
+    directory = await unzipper.Open.file(filePath);
+  } catch (error) {
+    return { success: false, error: `Failed to open ZIP file: ${error.message}`, filePath };
+  }
   const entries = directory.files.map((entry) => ({
     entry,
     entryPath: decodeEntryPath(entry),
@@ -169,13 +184,19 @@ async function extractAndCompressZip(filePath) {
 
     await fs.mkdir(path.dirname(destinationPath), { recursive: true });
 
-    await new Promise((resolve, reject) => {
-      entry
-        .stream()
-        .pipe(fss.createWriteStream(destinationPath))
-        .on('finish', resolve)
-        .on('error', reject);
-    });
+    try {
+      await pipeline(entry.stream(), fss.createWriteStream(destinationPath));
+    } catch (error) {
+      compressedResults.push({
+        success: false,
+        error: `Failed to extract ZIP entry: ${error.message}`,
+        filePath: destinationPath,
+      });
+      console.error(
+        `[/extract] entry failed zip=${filePath} entry=${entryPath} error=${error.message}`,
+      );
+      continue;
+    }
 
     const ext = path.extname(destinationPath).toLowerCase();
     if (!COMPRESSIBLE_EXTENSIONS.has(ext)) {
@@ -222,13 +243,18 @@ app.post('/compress', async (req, res) => {
 
   console.log(`[/compress] received path=${filePath}`);
 
-  const result = await compressImageWithDuplicateGuard(filePath, '/compress');
+  try {
+    const result = await compressImageWithDuplicateGuard(filePath, '/compress');
 
-  if (result.success) {
-    return res.json({ success: true, filePath: result.filePath, ...result });
+    if (result.success) {
+      return res.json({ success: true, filePath: result.filePath, ...result });
+    }
+
+    return res.status(500).json({ success: false, error: result.error, filePath });
+  } catch (error) {
+    console.error(`[/compress] failed path=${filePath} error=${error.message}`);
+    return res.status(500).json({ success: false, error: error.message, filePath });
   }
-
-  return res.status(500).json({ success: false, error: result.error, filePath });
 });
 
 app.post('/extract', async (req, res) => {
@@ -244,8 +270,14 @@ app.post('/extract', async (req, res) => {
 
   try {
     const result = await extractAndCompressZip(filePath);
-    return res.json(result);
+    if (result.success) {
+      return res.json(result);
+    }
+
+    console.error(`[/extract] failed path=${filePath} error=${result.error}`);
+    return res.status(500).json(result);
   } catch (error) {
+    console.error(`[/extract] failed path=${filePath} error=${error.message}`);
     return res.status(500).json({ success: false, error: error.message, filePath });
   }
 });
