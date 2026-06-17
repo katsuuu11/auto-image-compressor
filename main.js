@@ -180,6 +180,24 @@ const ZIP_STABLE_SIZE_REQUIRED_MS = 2000;
 const ZIP_STABLE_SIZE_TIMEOUT_MS = 2 * 60 * 1000;
 
 const STATUS = {
+  idle: { tooltip: '$(file-media) Image Compress' },
+  processing: { tooltip: '$(sync~spin) Compressing...' },
+  success: { tooltip: '$(check) Image Compress' },
+};
+let currentStatusState = 'idle';
+
+function updateStatus(state, details = {}) {
+  currentStatusState = state;
+  if (!tray) return;
+
+  // Electron's tray title is rendered as visible text next to the tray icon on macOS.
+  // Keep it empty so VS Code-style icon labels do not appear beside the menu bar icon.
+  tray.setTitle('');
+
+  if (state === 'error') {
+    const tooltipLines = ['$(error) Image Compress Error', '圧縮ツールでエラーが発生しました'];
+    if (details.filePath) tooltipLines.push(details.filePath);
+    if (details.error) tooltipLines.push(details.error);
   idle: { text: '$(file-media) Image Compress', tooltip: 'Image Compress' },
   processing: { text: '$(sync~spin) Compressing...', tooltip: '画像を圧縮中です' },
   success: { text: '$(check) Image Compress', tooltip: 'Image Compress: 完了' },
@@ -516,6 +534,7 @@ function initializeTray() {
   tray = new Tray(trayIcon);
   updateStatus('idle');
   tray.on('click', () => {
+    if (currentStatusState === 'error') {
     const tooltip = tray.getToolTip ? tray.getToolTip() : '';
     if (tooltip.includes('圧縮ツールでエラーが発生しました')) {
       openLogWindow();
