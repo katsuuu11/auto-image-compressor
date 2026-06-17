@@ -198,11 +198,25 @@ function updateStatus(state, details = {}) {
     const tooltipLines = ['$(error) Image Compress Error', '圧縮ツールでエラーが発生しました'];
     if (details.filePath) tooltipLines.push(details.filePath);
     if (details.error) tooltipLines.push(details.error);
+  idle: { text: '$(file-media) Image Compress', tooltip: 'Image Compress' },
+  processing: { text: '$(sync~spin) Compressing...', tooltip: '画像を圧縮中です' },
+  success: { text: '$(check) Image Compress', tooltip: 'Image Compress: 完了' },
+};
+
+function updateStatus(state, details = {}) {
+  if (!tray) return;
+
+  if (state === 'error') {
+    const tooltipLines = ['圧縮ツールでエラーが発生しました'];
+    if (details.filePath) tooltipLines.push(details.filePath);
+    if (details.error) tooltipLines.push(details.error);
+    tray.setTitle('$(error) Image Compress Error');
     tray.setToolTip(tooltipLines.join('\n'));
     return;
   }
 
   const status = STATUS[state] || STATUS.idle;
+  tray.setTitle(status.text);
   tray.setToolTip(status.tooltip);
 }
 
@@ -521,6 +535,8 @@ function initializeTray() {
   updateStatus('idle');
   tray.on('click', () => {
     if (currentStatusState === 'error') {
+    const tooltip = tray.getToolTip ? tray.getToolTip() : '';
+    if (tooltip.includes('圧縮ツールでエラーが発生しました')) {
       openLogWindow();
       return;
     }
