@@ -1,5 +1,6 @@
-const { app, Tray, Menu, BrowserWindow, dialog, nativeImage } = require('electron');
+const { app, Tray, Menu, BrowserWindow, dialog, nativeImage, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs/promises');
 const { spawn } = require('child_process');
 const chokidar = require('chokidar');
 let store = null;
@@ -10,8 +11,159 @@ async function initializeStore() {
     name: 'settings',
     defaults: {
       watchedFolders: [],
+      tinifyApiKey: '',
+      tinifyEnabled: true,
+      tinifyCount: 0,
     },
   });
+}
+
+function setTinifyApiKey() {
+  const currentApiKey = store.get('tinifyApiKey', '');
+  const currentApiKeyPreview = currentApiKey ? currentApiKey.slice(0, 8) : '未設定';
+  const saveChannel = `tinify-api-key:save:${Date.now()}`;
+  const cancelChannel = `tinify-api-key:cancel:${Date.now()}`;
+  const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[character]));
+
+  const apiKeyWindow = new BrowserWindow({
+    width: 420,
+    height: 240,
+    title: 'TinyPNG APIキーを設定',
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    ipcMain.removeAllListeners(saveChannel);
+    ipcMain.removeAllListeners(cancelChannel);
+    if (!apiKeyWindow.isDestroyed()) {
+      apiKeyWindow.close();
+    }
+  };
+
+  ipcMain.once(saveChannel, (_event, apiKey) => {
+    const result = apiKey.trim();
+    store.set('tinifyApiKey', result);
+    pushLog('TinyPNG APIキーを更新しました');
+    dialog.showMessageBox({
+      type: 'info',
+      title: '保存しました',
+      message: 'TinyPNG APIキーを保存しました',
+      buttons: ['OK'],
+    });
+
+    if (serverRunning) {
+      stopServer();
+      setTimeout(startServer, 1000);
+    }
+
+    cleanup();
+  });
+
+  ipcMain.once(cancelChannel, cleanup);
+  apiKeyWindow.on('closed', cleanup);
+
+  apiKeyWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
+    <!DOCTYPE html>
+    <html lang="ja">
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 24px;
+            color: #222;
+          }
+          label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+          }
+          input {
+            box-sizing: border-box;
+            width: 100%;
+            padding: 8px;
+            font-size: 14px;
+          }
+          .current {
+            margin-bottom: 16px;
+            color: #555;
+          }
+          .actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 20px;
+          }
+          button {
+            padding: 6px 14px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="current">現在のキー: ${escapeHtml(currentApiKeyPreview)}</div>
+        <form id="api-key-form">
+          <label for="api-key">TinyPNG APIキー</label>
+          <input id="api-key" type="password" autocomplete="off" autofocus />
+          <div class="actions">
+            <button type="button" id="cancel">キャンセル</button>
+            <button type="submit">保存</button>
+          </div>
+        </form>
+        <script>
+          const { ipcRenderer } = require('electron');
+          const form = document.getElementById('api-key-form');
+          const input = document.getElementById('api-key');
+          const cancel = document.getElementById('cancel');
+
+          form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            ipcRenderer.send('${saveChannel}', input.value);
+          });
+
+          cancel.addEventListener('click', () => {
+            ipcRenderer.send('${cancelChannel}');
+          });
+        </script>
+      </body>
+    </html>
+  `)}`);
+}
+
+function toggleTinify() {
+  const current = store.get('tinifyEnabled', true);
+  store.set('tinifyEnabled', !current);
+  pushLog(`TinyPNG ${!current ? '有効' : '無効'} に変更しました`);
+  if (serverRunning) {
+    stopServer();
+    setTimeout(() => startServer(), 1000);
+  }
+  updateTrayMenu();
+}
+
+function buildTinifyGauge() {
+  const count = store.get('tinifyCount', 0);
+  const enabled = store.get('tinifyEnabled', true);
+  const remaining = 500 - count;
+  const filled = Math.round((remaining / 500) * 10);
+  const empty = 10 - filled;
+  const bar = '█'.repeat(filled) + '░'.repeat(empty);
+  const status = enabled ? 'ON' : 'OFF';
+  return `TinyPNG [${status}]  ${bar}  ${remaining}/500`;
 }
 
 let tray = null;
@@ -23,6 +175,54 @@ const folderWatchers = new Map();
 const processingFiles = new Set();
 const WATCHED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 const WATCHED_FILE_EXTENSIONS = new Set([...WATCHED_IMAGE_EXTENSIONS, '.zip']);
+const ZIP_STABLE_SIZE_CHECK_INTERVAL_MS = 500;
+const ZIP_STABLE_SIZE_REQUIRED_MS = 2000;
+const ZIP_STABLE_SIZE_TIMEOUT_MS = 2 * 60 * 1000;
+
+const STATUS = {
+  idle: { tooltip: '$(file-media) Image Compress' },
+  processing: { tooltip: '$(sync~spin) Compressing...' },
+  success: { tooltip: '$(check) Image Compress' },
+};
+let currentStatusState = 'idle';
+
+function updateStatus(state, details = {}) {
+  currentStatusState = state;
+  if (!tray) return;
+
+  // Electron's tray title is rendered as visible text next to the tray icon on macOS.
+  // Keep it empty so VS Code-style icon labels do not appear beside the menu bar icon.
+  tray.setTitle('');
+
+  if (state === 'error') {
+    const tooltipLines = ['$(error) Image Compress Error', '圧縮ツールでエラーが発生しました'];
+    if (details.filePath) tooltipLines.push(details.filePath);
+    if (details.error) tooltipLines.push(details.error);
+  idle: { text: '$(file-media) Image Compress', tooltip: 'Image Compress' },
+  processing: { text: '$(sync~spin) Compressing...', tooltip: '画像を圧縮中です' },
+  success: { text: '$(check) Image Compress', tooltip: 'Image Compress: 完了' },
+};
+
+function updateStatus(state, details = {}) {
+  if (!tray) return;
+
+  if (state === 'error') {
+    const tooltipLines = ['圧縮ツールでエラーが発生しました'];
+    if (details.filePath) tooltipLines.push(details.filePath);
+    if (details.error) tooltipLines.push(details.error);
+    tray.setTitle('$(error) Image Compress Error');
+    tray.setToolTip(tooltipLines.join('\n'));
+    return;
+  }
+
+  const status = STATUS[state] || STATUS.idle;
+  tray.setTitle(status.text);
+  tray.setToolTip(status.tooltip);
+}
+
+function setErrorStatus(filePath, error) {
+  updateStatus('error', { filePath, error: error.message || String(error) });
+}
 
 function pushLog(message) {
   const line = `[${new Date().toISOString()}] ${message}`;
@@ -42,6 +242,7 @@ function setWatchedFolders(folders) {
 }
 
 async function postToServer(endpoint, filePath) {
+  updateStatus('processing');
   try {
     const response = await fetch(`http://localhost:3000${endpoint}`, {
       method: 'POST',
@@ -57,13 +258,44 @@ async function postToServer(endpoint, filePath) {
     }
 
     pushLog(`${endpoint} succeeded: ${filePath}`);
+    updateStatus('success');
   } catch (error) {
     pushLog(`[ERROR] ${endpoint} failed: ${filePath} (${error.message})`);
+    setErrorStatus(filePath, error);
   }
 }
 
 function isWatchedFile(filePath) {
   return WATCHED_FILE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+async function waitForStableFileSize(filePath) {
+  const startedAt = Date.now();
+  let previousSize = null;
+  let stableSince = null;
+
+  while (Date.now() - startedAt < ZIP_STABLE_SIZE_TIMEOUT_MS) {
+    let currentSize;
+    try {
+      currentSize = (await fs.stat(filePath)).size;
+    } catch (error) {
+      throw new Error(`ファイルサイズ確認に失敗しました: ${error.message}`);
+    }
+
+    if (currentSize === previousSize) {
+      stableSince ??= Date.now();
+      if (Date.now() - stableSince >= ZIP_STABLE_SIZE_REQUIRED_MS) {
+        return;
+      }
+    } else {
+      previousSize = currentSize;
+      stableSince = null;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, ZIP_STABLE_SIZE_CHECK_INTERVAL_MS));
+  }
+
+  throw new Error('ファイルサイズが安定する前にタイムアウトしました');
 }
 
 async function handleDetectedFile(filePath) {
@@ -80,8 +312,15 @@ async function handleDetectedFile(filePath) {
       pushLog(`[watch] posting endpoint=/compress path=${filePath}`);
       await postToServer('/compress', filePath);
     } else if (ext === '.zip') {
-      pushLog(`[watch] posting endpoint=/extract path=${filePath}`);
-      await postToServer('/extract', filePath);
+      try {
+        pushLog(`[watch] waiting for stable ZIP size path=${filePath}`);
+        await waitForStableFileSize(filePath);
+        pushLog(`[watch] posting endpoint=/extract path=${filePath}`);
+        await postToServer('/extract', filePath);
+      } catch (error) {
+        pushLog(`[ERROR] ZIP is not ready: ${filePath} (${error.message})`);
+        setErrorStatus(filePath, error);
+      }
     }
   } finally {
     processingFiles.delete(filePath);
@@ -198,6 +437,11 @@ function updateTrayMenu() {
   const statusLabel = serverRunning ? '● 稼働中' : '● 停止中';
   const template = [
     { label: statusLabel, enabled: false },
+    { label: buildTinifyGauge(), enabled: false },
+    {
+      label: store.get('tinifyEnabled', true) ? 'TinyPNG を無効にする' : 'TinyPNG を有効にする',
+      click: toggleTinify,
+    },
     { type: 'separator' },
     { label: '圧縮を開始', click: startServer, enabled: !serverRunning },
     { label: '圧縮を停止', click: stopServer, enabled: serverRunning },
@@ -205,6 +449,7 @@ function updateTrayMenu() {
     { label: '監視フォルダを追加', click: addWatchedFolder },
     { label: '監視フォルダを管理', submenu: createWatchedFolderManagementSubmenu() },
     { type: 'separator' },
+    { label: 'TinyPNG APIキーを設定', click: setTinifyApiKey },
     { label: 'ログを見る', click: openLogWindow },
     { type: 'separator' },
     { label: '終了', click: () => app.quit() },
@@ -217,11 +462,15 @@ function startServer() {
   if (serverProcess) return;
 
   const serverPath = path.join(__dirname, 'app', 'index.js');
+  const tinifyApiKey = store.get('tinifyApiKey', '');
+  const tinifyEnabled = store.get('tinifyEnabled', true);
   serverProcess = spawn(process.execPath, [serverPath], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
+      TINIFY_ENABLED: tinifyEnabled ? '1' : '0',
+      ...(tinifyApiKey && tinifyEnabled ? { TINIFY_API_KEY: tinifyApiKey } : {}),
     },
   });
 
@@ -229,7 +478,16 @@ function startServer() {
   pushLog('Compression server started on port 3000.');
   updateTrayMenu();
 
-  serverProcess.stdout.on('data', (data) => pushLog(data.toString().trim()));
+  serverProcess.stdout.on('data', (data) => {
+    const text = data.toString().trim();
+    pushLog(text);
+
+    const match = text.match(/compressionCount=(\d+)\/500/);
+    if (match) {
+      store.set('tinifyCount', parseInt(match[1], 10));
+      updateTrayMenu();
+    }
+  });
   serverProcess.stderr.on('data', (data) => pushLog(`[ERROR] ${data.toString().trim()}`));
 
   serverProcess.on('exit', (code, signal) => {
@@ -274,8 +532,16 @@ function initializeTray() {
   const trayIcon = nativeImage.createFromPath(trayIconPath).resize({ width: 18, height: 18 });
   trayIcon.setTemplateImage(true);
   tray = new Tray(trayIcon);
-  tray.setToolTip('ImageCompressor');
-  tray.on('click', () => tray.popUpContextMenu());
+  updateStatus('idle');
+  tray.on('click', () => {
+    if (currentStatusState === 'error') {
+    const tooltip = tray.getToolTip ? tray.getToolTip() : '';
+    if (tooltip.includes('圧縮ツールでエラーが発生しました')) {
+      openLogWindow();
+      return;
+    }
+    tray.popUpContextMenu();
+  });
   updateTrayMenu();
 }
 
