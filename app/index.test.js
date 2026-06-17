@@ -228,3 +228,12 @@ test('compressImageWithDuplicateGuard skips completed paths during cooldown only
   assert.match(warnings.join('\n'), /reason=cooldown/);
   assert.match(warnings.join('\n'), /source=second/);
 });
+
+test('extractAndCompressZip returns failure when the ZIP file is missing', async () => {
+  const missingZipPath = path.join(os.tmpdir(), `missing-${Date.now()}.zip`);
+  const result = await extractAndCompressZip(missingZipPath);
+
+  assert.equal(result.success, false);
+  assert.equal(result.filePath, missingZipPath);
+  assert.match(result.error, /ZIP file does not exist/);
+});
