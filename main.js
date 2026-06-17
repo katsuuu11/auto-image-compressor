@@ -1,5 +1,6 @@
 const { app, Tray, Menu, BrowserWindow, dialog, nativeImage, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs/promises');
 const { spawn } = require('child_process');
 const chokidar = require('chokidar');
 let store = null;
@@ -174,6 +175,36 @@ const folderWatchers = new Map();
 const processingFiles = new Set();
 const WATCHED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 const WATCHED_FILE_EXTENSIONS = new Set([...WATCHED_IMAGE_EXTENSIONS, '.zip']);
+const ZIP_STABLE_SIZE_CHECK_INTERVAL_MS = 500;
+const ZIP_STABLE_SIZE_REQUIRED_MS = 2000;
+const ZIP_STABLE_SIZE_TIMEOUT_MS = 2 * 60 * 1000;
+
+const STATUS = {
+  idle: { text: '$(file-media) Image Compress', tooltip: 'Image Compress' },
+  processing: { text: '$(sync~spin) Compressing...', tooltip: '画像を圧縮中です' },
+  success: { text: '$(check) Image Compress', tooltip: 'Image Compress: 完了' },
+};
+
+function updateStatus(state, details = {}) {
+  if (!tray) return;
+
+  if (state === 'error') {
+    const tooltipLines = ['圧縮ツールでエラーが発生しました'];
+    if (details.filePath) tooltipLines.push(details.filePath);
+    if (details.error) tooltipLines.push(details.error);
+    tray.setTitle('$(error) Image Compress Error');
+    tray.setToolTip(tooltipLines.join('\n'));
+    return;
+  }
+
+  const status = STATUS[state] || STATUS.idle;
+  tray.setTitle(status.text);
+  tray.setToolTip(status.tooltip);
+}
+
+function setErrorStatus(filePath, error) {
+  updateStatus('error', { filePath, error: error.message || String(error) });
+}
 
 function pushLog(message) {
   const line = `[${new Date().toISOString()}] ${message}`;
@@ -193,6 +224,7 @@ function setWatchedFolders(folders) {
 }
 
 async function postToServer(endpoint, filePath) {
+  updateStatus('processing');
   try {
     const response = await fetch(`http://localhost:3000${endpoint}`, {
       method: 'POST',
@@ -208,13 +240,44 @@ async function postToServer(endpoint, filePath) {
     }
 
     pushLog(`${endpoint} succeeded: ${filePath}`);
+    updateStatus('success');
   } catch (error) {
     pushLog(`[ERROR] ${endpoint} failed: ${filePath} (${error.message})`);
+    setErrorStatus(filePath, error);
   }
 }
 
 function isWatchedFile(filePath) {
   return WATCHED_FILE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+async function waitForStableFileSize(filePath) {
+  const startedAt = Date.now();
+  let previousSize = null;
+  let stableSince = null;
+
+  while (Date.now() - startedAt < ZIP_STABLE_SIZE_TIMEOUT_MS) {
+    let currentSize;
+    try {
+      currentSize = (await fs.stat(filePath)).size;
+    } catch (error) {
+      throw new Error(`ファイルサイズ確認に失敗しました: ${error.message}`);
+    }
+
+    if (currentSize === previousSize) {
+      stableSince ??= Date.now();
+      if (Date.now() - stableSince >= ZIP_STABLE_SIZE_REQUIRED_MS) {
+        return;
+      }
+    } else {
+      previousSize = currentSize;
+      stableSince = null;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, ZIP_STABLE_SIZE_CHECK_INTERVAL_MS));
+  }
+
+  throw new Error('ファイルサイズが安定する前にタイムアウトしました');
 }
 
 async function handleDetectedFile(filePath) {
@@ -231,8 +294,15 @@ async function handleDetectedFile(filePath) {
       pushLog(`[watch] posting endpoint=/compress path=${filePath}`);
       await postToServer('/compress', filePath);
     } else if (ext === '.zip') {
-      pushLog(`[watch] posting endpoint=/extract path=${filePath}`);
-      await postToServer('/extract', filePath);
+      try {
+        pushLog(`[watch] waiting for stable ZIP size path=${filePath}`);
+        await waitForStableFileSize(filePath);
+        pushLog(`[watch] posting endpoint=/extract path=${filePath}`);
+        await postToServer('/extract', filePath);
+      } catch (error) {
+        pushLog(`[ERROR] ZIP is not ready: ${filePath} (${error.message})`);
+        setErrorStatus(filePath, error);
+      }
     }
   } finally {
     processingFiles.delete(filePath);
@@ -444,8 +514,15 @@ function initializeTray() {
   const trayIcon = nativeImage.createFromPath(trayIconPath).resize({ width: 18, height: 18 });
   trayIcon.setTemplateImage(true);
   tray = new Tray(trayIcon);
-  tray.setToolTip('ImageCompressor');
-  tray.on('click', () => tray.popUpContextMenu());
+  updateStatus('idle');
+  tray.on('click', () => {
+    const tooltip = tray.getToolTip ? tray.getToolTip() : '';
+    if (tooltip.includes('圧縮ツールでエラーが発生しました')) {
+      openLogWindow();
+      return;
+    }
+    tray.popUpContextMenu();
+  });
   updateTrayMenu();
 }
 
